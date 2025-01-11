@@ -11,6 +11,7 @@ import httpx
 import httpx._config
 import httpx._types
 import orjson
+import tenacity
 
 from oe_databank.models import (
     DatabankListResponse,
@@ -92,6 +93,8 @@ class DatabankAsyncClient:
         download_timeout_seconds: float | int = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
         poll_timeout_seconds: float | int = DEFAULT_POLL_TIMEOUT_SECONDS,
         poll_interval_seconds: float | int = DEFAULT_POLL_INTERVAL_SECONDS,
+        download_attempts: int = 3,
+        download_retry_delay_seconds: float | int = 1.0,
     ):
         """Initialize the API.
 
@@ -103,6 +106,8 @@ class DatabankAsyncClient:
             download_timeout_seconds (float | int, optional): The total time to wait for a download. Defaults to the client's default.
             poll_timeout_seconds (float | int, optional): The total time to wait for a file to be ready. Defaults to the client's default.
             poll_interval_seconds (float | int, optional): The polling interval in seconds. Defaults to the client's default.
+            download_attempts (int, optional): The maximum number of download retries. Defaults to 3.
+            download_retry_delay_seconds (float | int, optional): The time to sleep between download retries. Defaults to 1 second.
         """
         self.api_key = api_key
         self.headers = headers or {}
@@ -110,14 +115,27 @@ class DatabankAsyncClient:
         # Define before setting the client
         self.timeout = timeout
         self._client = client or self._make_client()
-        self.default_download_timeout_seconds = download_timeout_seconds
         self.default_poll_timeout_seconds = poll_timeout_seconds
         self.default_poll_interval_seconds = poll_interval_seconds
+        # Download settings
+        self.default_download_timeout_seconds = download_timeout_seconds
+        self.download_attempts = download_attempts
+        self.download_retry_delay_seconds = download_retry_delay_seconds
 
     @property
     def raw(self) -> httpx.AsyncClient:
         """The underlying HTTP client."""
         return self._client
+
+    @property
+    def __download_retry_wrapper(self):
+        return tenacity.retry(
+            stop=tenacity.stop_after_attempt(self.download_attempts),
+            wait=tenacity.wait_fixed(self.download_retry_delay_seconds),
+            retry=tenacity.retry_if_exception_type(
+                (httpx.NetworkError, httpx.TimeoutException)
+            ),
+        )
 
     def _make_client(self) -> httpx.AsyncClient:
         """Create an HTTP client with the API key in the headers."""
@@ -162,7 +180,7 @@ class DatabankAsyncClient:
     ) -> bytes | None:
         """Download a file with a file download request in the body."""
         # Must follow redirects as the polling URL is returned until the download is ready.
-        r = await self._client.post(
+        r = await self.__download_retry_wrapper(self._client.post)(
             "/filedownload",
             content=orjson.dumps(request.model_dump(mode="json")),
             timeout=self._resolve_download_timeout(timeout),
@@ -181,7 +199,7 @@ class DatabankAsyncClient:
     ) -> bytes | None:
         """Download a file by selection ID."""
         path = f"/filedownload/{selection_id}"
-        r = await self._client.get(
+        r = await self.__download_retry_wrapper(self._client.get)(
             path, timeout=self._resolve_download_timeout(timeout), follow_redirects=True
         )
         r.raise_for_status()
