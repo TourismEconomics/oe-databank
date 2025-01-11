@@ -1,5 +1,8 @@
 # oe-databank
 
+[![PyPI version](https://img.shields.io/pypi/v/oe-databank?color=fe7200&labelColor=eeeeee)](https://pypi.python.org/pypi/oe-databank/)
+![GitHub stars](https://img.shields.io/github/stars/tourismeconomics/oe-databank?color=fe7200&labelColor=eeeeee)
+
 Python expression of Oxford Economics' Databank API.
 
 ## Installation
