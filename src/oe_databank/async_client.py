@@ -18,9 +18,15 @@ from oe_databank.models import (
     FileDownloadRequestDto,
     QueueDownloadResponse,
     RegionResponse,
+    Selection,
     TreeResponse,
 )
-from oe_databank.utils import download_response_to_path_async
+from oe_databank.utils import (
+    download_path,
+    download_response_to_path_async,
+    reached_page_limit,
+    selection_payload,
+)
 
 # Request timeout for downloads
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 60
@@ -227,6 +233,68 @@ class DatabankAsyncClient:
             return await self.download_file_with_selection_id(
                 selection_id=selection_id, timeout=timeout, to_path=to_path
             )
+
+    async def download(
+        self,
+        selection: Selection | FileDownloadRequestDto | dict,
+        *,
+        page_size: int = 5000,
+        page_limit: int = -1,
+        include_metadata: bool = True,
+        timeout: int | None = None,
+    ) -> list:
+        """Download series JSON from `/download`, paging until exhausted.
+
+        Unlike `/filedownload` and `/QueueDownload`, this endpoint returns JSON
+        series and supports `page` / `pagesize`. Pagination is not available on
+        the file-download endpoints.
+
+        Args:
+            selection: A `Selection`, a selection dict, or a
+                `FileDownloadRequestDto` with exactly one selection.
+            page_size: Series per page. Defaults to 5000.
+            page_limit: Max pages to fetch. `-1` means no limit.
+            include_metadata: Whether to request metadata. Defaults to True.
+            timeout: Per-request timeout. Defaults to the client download timeout.
+
+        Returns:
+            list: Combined series from all fetched pages.
+        """
+        payload = selection_payload(selection)
+        body = orjson.dumps(payload)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        timeout = self._resolve_download_timeout(timeout)
+
+        page = 0
+        data_list: list | None = None
+
+        while not reached_page_limit(page, page_limit):
+            r = await self.__download_retry_wrapper(self._client.post)(
+                download_path(page, page_size, include_metadata=include_metadata),
+                content=body,
+                headers=headers,
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            new_data = orjson.loads(r.content)
+            if not isinstance(new_data, list):
+                raise TypeError(
+                    f"Expected a JSON list from /download, got {type(new_data).__name__}"
+                )
+
+            page += 1
+            if data_list is None:
+                data_list = new_data
+            else:
+                data_list.extend(new_data)
+
+            if len(new_data) < page_size:
+                break
+
+        return data_list or []
 
     async def queue_download_with_request_model(
         self,

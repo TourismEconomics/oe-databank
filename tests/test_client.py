@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
+import orjson
 import pytest
 
 from oe_databank.client import DatabankClient
@@ -140,3 +141,43 @@ class TestDatabankClient:
         mock_get.assert_called_once_with(
             "/Databank", timeout=client.default_download_timeout_seconds
         )
+
+    @patch("httpx.Client.post")
+    def test_download_paginates_until_short_page(
+        self, mock_post, client, download_request
+    ):
+        page0 = [{"id": i} for i in range(3)]
+        page1 = [{"id": i} for i in range(3, 5)]
+        r0 = MagicMock()
+        r0.status_code = 200
+        r0.content = orjson.dumps(page0)
+        r1 = MagicMock()
+        r1.status_code = 200
+        r1.content = orjson.dumps(page1)
+        mock_post.side_effect = [r0, r1]
+
+        result = client.download(download_request, page_size=3)
+
+        assert len(result) == 5
+        assert result[0]["id"] == 0
+        assert result[-1]["id"] == 4
+        assert mock_post.call_count == 2
+        assert mock_post.call_args_list[0].args[0] == (
+            "/download?includemetadata=true&page=0&pagesize=3"
+        )
+        assert mock_post.call_args_list[1].args[0] == (
+            "/download?includemetadata=true&page=1&pagesize=3"
+        )
+
+    @patch("httpx.Client.post")
+    def test_download_respects_page_limit(self, mock_post, client, download_request):
+        page = [{"id": i} for i in range(3)]
+        r0 = MagicMock()
+        r0.status_code = 200
+        r0.content = orjson.dumps(page)
+        mock_post.return_value = r0
+
+        result = client.download(download_request, page_size=3, page_limit=1)
+
+        assert len(result) == 3
+        assert mock_post.call_count == 1
