@@ -181,3 +181,50 @@ class TestDatabankClient:
 
         assert len(result) == 3
         assert mock_post.call_count == 1
+
+    @patch("httpx.Client.post")
+    def test_download_retries_on_503_then_succeeds(
+        self, mock_post, client, download_request
+    ):
+        client.download_attempts = 3
+        client.download_retry_delay_seconds = 0.01
+
+        fail = MagicMock()
+        fail.status_code = 503
+        fail.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "503 Server Error",
+            request=httpx.Request("POST", "https://example.com/download"),
+            response=httpx.Response(503, request=httpx.Request("POST", "https://example.com/download")),
+        )
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.content = orjson.dumps([{"id": 1}])
+        ok.raise_for_status = MagicMock()
+        mock_post.side_effect = [fail, ok]
+
+        result = client.download(download_request, page_size=10)
+
+        assert result == [{"id": 1}]
+        assert mock_post.call_count == 2
+
+    @patch("httpx.Client.post")
+    def test_download_does_not_retry_on_400(self, mock_post, client, download_request):
+        client.download_attempts = 3
+        client.download_retry_delay_seconds = 0.01
+
+        bad = MagicMock()
+        bad.status_code = 400
+        request = httpx.Request("POST", "https://example.com/download")
+        response = httpx.Response(400, request=request)
+        bad.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "400 Bad Request",
+            request=request,
+            response=response,
+        )
+        mock_post.return_value = bad
+
+        with pytest.raises(httpx.HTTPStatusError):
+            client.download(download_request, page_size=10)
+
+        assert mock_post.call_count == 1

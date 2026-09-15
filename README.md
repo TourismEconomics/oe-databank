@@ -65,15 +65,16 @@ DatabankClient(api_key=...).query(request=request, to_path="sync_result.csv")
 asyncio.run(DatabankAsyncClient(api_key=...).query(request=request, to_path="async_result.csv"))
 ```
 
-You might run into issues with large downloads, so you can use retry options to handle errors during download.
+You might run into issues with large downloads, so you can use retry options to handle
+transient network errors and HTTP `429` / `502` / `503` / `504` responses. Retries use
+exponential backoff based on `download_retry_delay_seconds`.
 
 ```python
 from oe_databank import DatabankClient
 
-DatabankClient(api_key=...).query(
-    request=request,
-    to_path="sync_result.csv",
-    download_attempts=3,
-    download_retry_delay_seconds=2.0,
+client = DatabankClient(
+    api_key=...,
+    download_attempts=5,
+    download_retry_delay_seconds=10,
 )
 ```

@@ -24,6 +24,7 @@ from oe_databank.models import (
 from oe_databank.utils import (
     download_path,
     download_response_to_path_async,
+    is_retryable_download_exception,
     reached_page_limit,
     selection_payload,
 )
@@ -137,11 +138,27 @@ class DatabankAsyncClient:
     def __download_retry_wrapper(self):
         return tenacity.retry(
             stop=tenacity.stop_after_attempt(self.download_attempts),
-            wait=tenacity.wait_fixed(self.download_retry_delay_seconds),
-            retry=tenacity.retry_if_exception_type(
-                (httpx.NetworkError, httpx.TimeoutException)
+            wait=tenacity.wait_exponential(
+                multiplier=self.download_retry_delay_seconds,
+                min=self.download_retry_delay_seconds,
+                max=60,
             ),
+            retry=tenacity.retry_if_exception(is_retryable_download_exception),
+            reraise=True,
         )
+
+    async def _request_with_download_retry(
+        self, method, *args, **kwargs
+    ) -> httpx.Response:
+        """Perform an HTTP call, raising and retrying on transient failures."""
+
+        @self.__download_retry_wrapper
+        async def _do() -> httpx.Response:
+            response = await method(*args, **kwargs)
+            response.raise_for_status()
+            return response
+
+        return await _do()
 
     def _make_client(self) -> httpx.AsyncClient:
         """Create an HTTP client with the API key in the headers."""
@@ -186,13 +203,13 @@ class DatabankAsyncClient:
     ) -> bytes | None:
         """Download a file with a file download request in the body."""
         # Must follow redirects as the polling URL is returned until the download is ready.
-        r = await self.__download_retry_wrapper(self._client.post)(
+        r = await self._request_with_download_retry(
+            self._client.post,
             "/filedownload",
             content=orjson.dumps(request.model_dump(mode="json")),
             timeout=self._resolve_download_timeout(timeout),
             follow_redirects=True,
         )
-        r.raise_for_status()
         if to_path:
             return await download_response_to_path_async(r, to_path)
         return r.content
@@ -205,10 +222,12 @@ class DatabankAsyncClient:
     ) -> bytes | None:
         """Download a file by selection ID."""
         path = f"/filedownload/{selection_id}"
-        r = await self.__download_retry_wrapper(self._client.get)(
-            path, timeout=self._resolve_download_timeout(timeout), follow_redirects=True
+        r = await self._request_with_download_retry(
+            self._client.get,
+            path,
+            timeout=self._resolve_download_timeout(timeout),
+            follow_redirects=True,
         )
-        r.raise_for_status()
         if to_path:
             return await download_response_to_path_async(r, to_path)
         return r.content
@@ -272,13 +291,13 @@ class DatabankAsyncClient:
         data_list: list | None = None
 
         while not reached_page_limit(page, page_limit):
-            r = await self.__download_retry_wrapper(self._client.post)(
+            r = await self._request_with_download_retry(
+                self._client.post,
                 download_path(page, page_size, include_metadata=include_metadata),
                 content=body,
                 headers=headers,
                 timeout=timeout,
             )
-            r.raise_for_status()
             new_data = orjson.loads(r.content)
             if not isinstance(new_data, list):
                 raise TypeError(

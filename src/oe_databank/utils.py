@@ -11,6 +11,18 @@ import httpx
 
 from oe_databank.models import FileDownloadRequestDto, Selection
 
+# Transient OE / gateway failures worth retrying on downloads.
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 502, 503, 504})
+
+
+def is_retryable_download_exception(exc: BaseException) -> bool:
+    """Return True for network/timeouts and retryable HTTP status errors."""
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRYABLE_HTTP_STATUS_CODES
+    return False
+
 
 def download_response_to_path(r: httpx.Response, path: os.PathLike):
     """Write a download response to a file."""
