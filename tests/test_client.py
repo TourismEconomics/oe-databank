@@ -194,7 +194,9 @@ class TestDatabankClient:
         fail.raise_for_status.side_effect = httpx.HTTPStatusError(
             "503 Server Error",
             request=httpx.Request("POST", "https://example.com/download"),
-            response=httpx.Response(503, request=httpx.Request("POST", "https://example.com/download")),
+            response=httpx.Response(
+                503, request=httpx.Request("POST", "https://example.com/download")
+            ),
         )
 
         ok = MagicMock()
