@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -138,4 +138,27 @@ class TestDatabankAsyncClient:
         assert response[0]["name"] == "Test Databank"
         mock_get.assert_called_once_with(
             "/Databank", timeout=client.default_download_timeout_seconds
+        )
+
+    @pytest.mark.asyncio
+    @patch("httpx.AsyncClient.post")
+    async def test_download_paginates_until_short_page(
+        self, mock_post, client, download_request
+    ):
+        import orjson
+
+        page0 = [{"id": i} for i in range(3)]
+        page1 = [{"id": i} for i in range(3, 4)]
+        r0 = AsyncMock(status_code=200, content=orjson.dumps(page0))
+        r0.raise_for_status = MagicMock()
+        r1 = AsyncMock(status_code=200, content=orjson.dumps(page1))
+        r1.raise_for_status = MagicMock()
+        mock_post.side_effect = [r0, r1]
+
+        result = await client.download(download_request, page_size=3)
+
+        assert len(result) == 4
+        assert mock_post.call_count == 2
+        assert mock_post.call_args_list[0].args[0] == (
+            "/download?includemetadata=true&page=0&pagesize=3"
         )
